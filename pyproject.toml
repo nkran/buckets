@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gems"
+version = "0.1.0"
+description = "Mechanistic flux-generation module (iCHO3K + GIMME) for CHO iFB soft-sensor features"
+requires-python = ">=3.9"
+dependencies = [
+    "cobra>=0.29",
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "matplotlib>=3.6",
+    "seaborn>=0.12",
+    "pyarrow>=12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+viz = ["escher>=1.7"]
+explorer = ["escher>=1.7", "streamlit>=1.30"]
+
+[project.scripts]
+gems-run = "gems.pipeline:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = ["slow: end-to-end pipeline runs (deselect with '-m \"not slow\"')"]

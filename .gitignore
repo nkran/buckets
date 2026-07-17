@@ -1,0 +1,11 @@
+.claude/
+.venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+*.egg-info/
+
+# regenerable data (downloaded/derived; see README + scripts/*.py to rebuild)
+data/
+escher_maps/
