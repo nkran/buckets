@@ -70,6 +70,27 @@ def reaction_data_for_sample(matrix: pd.DataFrame, sample_id: str) -> dict[str, 
     return {str(k): float(v) for k, v in s.items()}
 
 
+def resolve_aliases(map_path, data: dict[str, float]) -> dict[str, float]:
+    """For KEGG-derived maps, show each ambiguous step with the matching iCHO3K reaction
+    that carries the most flux in this sample.
+
+    One KEGG step can match several iCHO3K reactions (mostly cytosolic vs mitochondrial
+    variants). The map draws one of them; without this, that arrow could read zero while
+    its twin carries the flux. Uses the ``<map>.aliases.json`` sidecar written by
+    ``scripts/prepare_escher_maps.py``; maps without one are returned unchanged.
+    """
+    side = Path(map_path).with_suffix(".aliases.json")
+    if not side.exists():
+        return data
+    aliases = json.loads(side.read_text())
+    out = dict(data)
+    for shown, candidates in aliases.items():
+        vals = [(abs(data[c]), data[c]) for c in candidates if c in data]
+        if vals:
+            out[shown] = max(vals)[1]
+    return out
+
+
 def coverage_for_map(escher_map: list, data: dict[str, float]) -> float:
     """Fraction of the map's reactions that have a value in ``data``."""
     rids = [r["bigg_id"] for r in escher_map[1]["reactions"].values()]
@@ -90,6 +111,7 @@ def build_escher_html(map_path, reaction_data: dict[str, float], *, mode: str = 
     if scale is None:
         scale = FLUX_SCALE if mode == "flux" else EXPRESSION_SCALE
     map_json = Path(map_path).read_text()
+    reaction_data = resolve_aliases(map_path, reaction_data or {})
 
     builder = Builder(
         map_json=map_json,

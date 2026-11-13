@@ -78,7 +78,7 @@ def render_html(map_file: str, sample: str, mode: str, kind: str, flux_dir: str)
     matrix = load_matrix(kind, flux_dir)
     emap = json.loads((MAPS_DIR / map_file).read_text())
     data = ev.reaction_data_for_sample(matrix, sample)
-    cov = ev.coverage_for_map(emap, data)
+    cov = ev.coverage_for_map(emap, ev.resolve_aliases(MAPS_DIR / map_file, data))
     html = ev.build_escher_html(MAPS_DIR / map_file, data, mode=mode)
     return html, cov
 

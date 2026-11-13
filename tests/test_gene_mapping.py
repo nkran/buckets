@@ -43,3 +43,14 @@ def test_counts_to_entrez_one_ensembl_to_many_entrez():
     assert out.loc["100", "s1"] == 5.0   # ENS1 expression attributed to both
     assert out.loc["200", "s1"] == 5.0
     assert out.loc["300", "s1"] == 3.0
+
+
+def test_resolve_aliases_picks_variant_carrying_flux(tmp_path):
+    import json
+    from gems import escher_view as ev
+    mp = tmp_path / "m.json"
+    mp.write_text("[]")
+    (tmp_path / "m.aliases.json").write_text(json.dumps({"CS": ["CS", "CSm"]}))
+    out = ev.resolve_aliases(mp, {"CS": 0.0, "CSm": -2.5, "PFK": 1.0})
+    assert out["CS"] == -2.5 and out["PFK"] == 1.0
+    assert ev.resolve_aliases(tmp_path / "none.json", {"CS": 0.0}) == {"CS": 0.0}

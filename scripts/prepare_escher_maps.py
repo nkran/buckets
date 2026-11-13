@@ -142,6 +142,8 @@ def fetch_kegg(model, manifest: dict) -> None:
             continue
         out = MAPS_DIR / f"kegg_{pid}.json"
         out.write_text(json.dumps(emap))
+        if stats.aliases:   # alternatives resolved per sample at render time
+            out.with_suffix(".aliases.json").write_text(json.dumps(stats.aliases, indent=1))
         tier = "Medium" if stats.coverage >= MEDIUM_COVERAGE else "Low"
         amb = stats.n_ambiguous / max(stats.n_reactions_mapped, 1)
         manifest.setdefault(kegg_category(num), []).append({

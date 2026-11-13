@@ -18,7 +18,7 @@ import re
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import config as C
@@ -155,6 +155,8 @@ class MapStats:
     n_reactions_total: int = 0
     n_reactions_mapped: int = 0
     n_ambiguous: int = 0
+    # displayed reaction id -> all iCHO3K reactions matching that KEGG step (when >1)
+    aliases: dict = field(default_factory=dict)
 
     @property
     def coverage(self) -> float:
@@ -250,6 +252,8 @@ def build_map_from_kgml(pathway_id: str, kgml_text: str, kegg2model: dict[str, s
         if not mapped_ids:
             continue
         bigg_rxn = sorted(mapped_ids)[0]
+        if len(mapped_ids) > 1:
+            stats.aliases[bigg_rxn] = sorted(mapped_ids)
 
         coord = next((rxn_coords[kr] for kr in kegg_rs if kr in rxn_coords), None)
         subs = [s.get("id") for s in rel.findall("substrate")]

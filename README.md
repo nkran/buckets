@@ -477,7 +477,10 @@ streamlit run app/streamlit_app.py           # open the explorer
   For the KEGG maps this is now the fraction of the *human* pathway present in iCHO3K.
 - RECON1 maps have no KEGG round-trip and are the most reliable (High).
 - `ambiguous_frac` = reactions where one KEGG reaction matched several iCHO3K reactions
-  (mostly compartment variants); one was chosen.
+  (mostly cytosolic vs mitochondrial variants). The map draws one arrow for the step and,
+  for each sample, shows the value of whichever variant carries the most flux
+  (alternatives are stored in `escher_maps/<map>.aliases.json`). Without this, about a
+  third of these arrows would read zero while their twin carried the flux.
 
 Sources: RECON1 from escher.github.io; KEGG hsa KGML + compound names from rest.kegg.jp;
 BiGG namespace + MetaNetX `reac_xref` from bigg.ucsd.edu / metanetx.org (all cached in
