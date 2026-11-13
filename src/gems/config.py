@@ -51,7 +51,8 @@ PRODUCT_EXCHANGE = None
 # C/N sources, all 20 amino acids, gases/salts, and common vitamin/cofactor
 # precursors. Bounds are generous (mmol/gDW/h); real per-run bounds are imposed
 # later per sample from q-rates.
-# TODO(real-data): replace with the actual AMBR basal medium + feed composition.
+# TODO(real-data): replace with the actual AMBR basal medium + feed composition
+# (README section 8, step 3).
 _AMINO_ACIDS = [
     "EX_ala_L_e", "EX_arg_L_e", "EX_asn_L_e", "EX_asp_L_e", "EX_cys_L_e",
     "EX_gln_L_e", "EX_glu_L_e", "EX_gly_e", "EX_his_L_e", "EX_ile_L_e",

@@ -212,11 +212,13 @@ model-gene ≈ 85%), infeasible-sample log, and all GIMME/q-rate parameters used
      `project, clone, condition, timepoint` + bioprocess measurements
      `VCD, Viability, Titer, Gluc, Gln, Glu, Lac, NH3`; optional `responder`.
      (VCD in 1e6 cells/mL, metabolites in mM, Titer in mg/L.)
-2. Provide a **real Ensembl-PICRH → Entrez crosswalk** at
-   `data/maps/ensembl_picrh_to_entrez.tsv` (columns `ensembl_gene_id, entrez_id`).
-   This is **already built** from Ensembl BioMart (dataset `cgpicr_gene_ensembl`,
-   `CriGri-PICRH-1.0`) and reaches **95.4% of iCHO3K's model genes** — well above the
-   0.8 target. To rebuild: query BioMart for `ensembl_gene_id → entrezgene_id`.
+2. The **Ensembl PICRH → Entrez crosswalk** is `data/maps/ensembl_picrh_to_entrez.tsv`
+   (columns `ensembl_gene_id, entrez_id, source`), the default the pipeline uses. It is
+   built from Ensembl BioMart (dataset `cgpicr_gene_ensembl`, `CriGri-PICRH-1.0`,
+   Ensembl 116): 21,909 direct BioMart links plus 83 genes with no BioMart Entrez link
+   mapped through an unambiguous gene symbol (`source = via_symbol`). It reaches
+   **2,800 of 2,929 iCHO3K model genes (95.6%)**. Versioned ids (`ENSCGRG00015007592.1`)
+   are accepted; the version suffix is stripped before mapping. See §8 step 2.
 3. Run `python -m gems.pipeline --raw data/raw`. For a dataset keyed by a different
    namespace (e.g. GSE140669's NCBI symbol/LOC), pass its own crosswalk with
    `--crosswalk data/maps/<file>.tsv`.
@@ -267,6 +269,30 @@ so read the **subsystem-level** trends, not individual reactions.
 parse sample names → schema, collapse replicates, normalize, and point the crosswalk
 at whatever gene-id namespace the dataset uses.
 
+### 7.0 Start here: the ZeLa fed-batch tutorial
+
+The best way to learn what the model does is `notebooks/04_zela_fedbatch_tutorial.ipynb`.
+It runs a real fed-batch dataset end to end: wild-type CHO vs ZeLa (a line engineered to
+secrete no lactate), 8 bioreactors, 43 samples over days 2-14, with **both** expression
+and measured uptake/secretion rates (published with iCHO3K).
+
+```bash
+python scripts/prepare_zela.py          # downloads + formats the data into data/zela/
+python -m gems.pipeline --raw data/zela --crosswalk data/zela/crosswalk.tsv --out results/zela
+```
+
+What it shows: 92% of model genes have data, all 43 samples solve, the growth the measured
+uptake can support tracks the measured growth rate (correlation 0.74, about 1.5x too high),
+and lactate dehydrogenase flux is switched off in ZeLa.
+
+**Measured rates as input.** If a data folder contains `exchange_rates.csv` (samples x
+exchange reactions, mmol/gDW/h, negative = uptake) the pipeline uses those instead of
+computing rates from concentrations. Because raw measurements are rarely exactly consistent
+with the network, `qrate_calc.reconcile_rates` first finds the closest feasible set of rates
+(optionally growing at least as fast as `measured_growth.csv`) and writes every adjustment
+to `exchange_reconciliation.csv`. Per-sample growth capacity and totals go to
+`sample_summary.csv`. In the explorer app, pick the run with the **Dataset** selector.
+
 ### 7.2 Master gene-ID bridge (one table linking every namespace)
 
 CHO data arrives keyed by many different identifiers. `scripts/build_gene_id_master.py`
@@ -305,25 +331,109 @@ iCHO3K's shipped map). See `notebooks/03_map_preparation_report.ipynb` §2b.
 
 ---
 
-## 8. Calibration knobs (revisit for real data)
+## 8. Adapting the pipeline to your data (checklist)
 
-All in `config.py` / `qrate_calc.py`, tagged `# TODO(real-data)`:
+Work through these in order. Everything you are expected to edit is in two files:
+**`src/gems/config.py`** and **`src/gems/qrate_calc.py`**. Lines tagged
+`# TODO(real-data)` are the ones still holding placeholders.
 
-| knob | what it controls | why it matters now |
+### Step 1 — Put your data in one folder (e.g. `data/raw/`)
+
+| File | Required | Content |
 |---|---|---|
-| `BASE_MEDIUM_UPTAKES` / `MEDIUM_UPTAKE` | which exchanges are open in the base model | currently a **generic proxy**, not the real AMBR chemically-defined medium |
-| `qrate_calc.FLUX_SCALE` | unit scaling of q-rates | uncalibrated placeholder — see the caveat below |
-| `GIMME_QUANTILE` | expression threshold for penalizing reactions | tune to your real expression distribution |
-| `GIMME_BIOMASS_FRACTION` | required growth (RMF) | 0.5 is a reasonable default; tune per phenotype |
-| `QRATE_TOL` | width of the exchange bound band | trade feasibility vs constraint tightness |
+| `counts.csv` | yes | DESeq2-normalised counts. Rows = Ensembl PICRH gene ids (`ENSCGRG…`, versions OK), columns = sample ids |
+| `metadata.csv` | yes | index = sample id; columns `project, clone, condition, timepoint` (timepoint in **days**) |
+| bioprocess columns in `metadata.csv` | optional | `VCD` (1e6 cells/mL), `Gluc, Gln, Glu, Lac, NH3` (mM), `Titer` (mg/L), `Viability` (%) — rates are then computed from consecutive timepoints |
+| `exchange_rates.csv` | optional, preferred if you have it | samples × exchange reaction ids (`EX_glc_e`, `EX_lac_L_e`, …), **mmol/gDW/h**, negative = uptake. Overrides the concentration route |
+| `measured_growth.csv` | optional | sample id, specific growth rate (1/h); used as a growth floor and for model-vs-measured comparison |
 
-> ⚠️ **Known caveat (by design, placeholder-driven):** because the medium and
-> `FLUX_SCALE` are generic placeholders, the measured q-rates are only *weakly
-> binding* and predicted **biomass is currently identical across samples**. The
-> discriminating signal today comes from the **expression-driven GIMME penalties**
-> (Responders correctly show lower lactate secretion + higher TCA flux). Calibrating
-> the medium + `FLUX_SCALE` against real gDW/volume data is what makes the exchange
-> constraints (and thus growth/yield) vary meaningfully per clone.
+`condition` labels are free text; if there are exactly two (e.g. `FB`, `iFB`) the
+differential-flux figures contrast them automatically. `responder` (optional column)
+adds a Responder-vs-NonResponder contrast.
+
+### Step 2 — Check the gene mapping (Ensembl PICRH)
+
+Nothing to edit: the default crosswalk `data/maps/ensembl_picrh_to_entrez.tsv` is
+built for PICRH. After a run, read `mapping_coverage.model_gene_coverage` in
+`results/fluxes/manifest.json` — on full PICRH data it should be about 0.95. A much
+lower value means the ids are from another assembly (CHOK1GS or CriGri_1.0 use
+different `ENSCGRG…` ids) or from a different Ensembl release; rebuild with
+`python scripts/build_gene_id_master.py`. Quick check before a full run:
+
+```python
+import pandas as pd
+from gems import gene_mapping, model_setup
+m = model_setup.get_base_model()
+c = pd.read_csv('data/raw/counts.csv', index_col=0)
+x = gene_mapping.load_crosswalk()
+print(gene_mapping.map_expression(m, c, x, c.columns[0])[1].as_dict())
+```
+
+### Step 3 — Medium composition  ⟵ **edit `src/gems/config.py`**
+
+This is where the AMBR basal medium + feeds go. The base model only lets the cell take
+up what is listed here; everything else is closed.
+
+| Setting (config.py) | What to put there |
+|---|---|
+| `_AMINO_ACIDS`, `_VITAMINS_COFACTORS` | exchange ids of the components actually in your basal medium + feed. Remove anything not in the medium |
+| `BASE_MEDIUM_UPTAKES` | the full uptake list (glucose + the two lists above + anything else, e.g. `EX_pyr_e`, `EX_lac_L_e` if fed) |
+| `MEDIUM_UPTAKE` | maximum uptake per component, mmol/gDW/h. Default 10 is effectively unlimited, which is why growth is currently the same in every sample. Realistic CHO amino-acid uptakes are 0.005–0.3; set this per component from your spent-media data if you can |
+| `MEDIUM_FREE` | water, protons, O2, phosphate, sulfate, bicarbonate — normally leave as is |
+
+To find the exchange id for a medium component, search the model:
+```python
+from gems import model_setup
+m = model_setup.load_raw_model()
+[(r.id, r.reactants[0].name) for r in m.exchanges if 'serine' in r.reactants[0].name.lower()]
+```
+After editing, rebuild the cached base model (it must still grow):
+`python -m gems.pipeline --raw data/raw --rebuild-model --limit 1`.
+
+### Step 4 — Which measured metabolites constrain the model  ⟵ `config.py`
+
+`METABOLITE_EXCHANGE` maps your `metadata.csv` column names to exchange reactions.
+Add entries for anything else you measure (e.g. `"Asn": "EX_asn_L_e"`, `"Ala": "EX_ala_L_e"`)
+and add the same names to `BIOPROCESS_COLS`. Every extra measured metabolite tightens
+the model; amino acids matter most because they otherwise stay capped only by Step 3.
+
+### Step 5 — Units of the computed rates  ⟵ **edit `src/gems/qrate_calc.py`**
+
+Only relevant on the concentration route (not with `exchange_rates.csv`).
+`q = ΔS / IVCD × FLUX_SCALE`. With VCD in 1e6 cells/mL, ΔS in mM and time in days,
+`ΔS / IVCD` is mmol per 10⁹ cells per day. To get mmol/gDW/h:
+
+`FLUX_SCALE = 1 / (cell dry weight per 10⁹ cells in g × 24)`
+
+For a typical CHO dry weight of 350 pg/cell (0.35 g per 10⁹ cells) that is
+**0.119**. The current `FLUX_SCALE = 30.0` is a placeholder from the synthetic scaffold
+— replace it, ideally with your own measured dry weight. `QRATE_TOL` (default 0.2) is
+the ± band allowed around each rate.
+
+### Step 6 — Biomass reaction  ⟵ `config.py`
+
+`BIOMASS_RXN = "biomass_cho_s"` (CHO-S, non-producing). iCHO3K also has
+`biomass_cho_prod` (producing line) and `biomass_cho` (generic). For IgG-producing
+clones `biomass_cho_prod` is the closer composition. Rebuild the base model after changing.
+
+### Step 7 — GIMME parameters (optional)  ⟵ `config.py`
+
+`GIMME_QUANTILE` (0.25): reactions with expression below this quantile are penalised.
+`GIMME_BIOMASS_FRACTION` (0.5): growth must stay at least this fraction of the maximum.
+Defaults are reasonable; revisit once you see your expression distribution.
+
+### Step 8 — Run and check
+
+```bash
+python -m gems.pipeline --raw data/raw --limit 6      # quick check
+python -m gems.pipeline --raw data/raw                # full run -> results/fluxes, results/figures
+```
+Check in `results/fluxes/`: `manifest.json` (gene coverage, infeasible samples),
+`sample_summary.csv` (growth capacity vs measured growth per sample) and, if you used
+`exchange_rates.csv`, `exchange_reconciliation.csv` (how far each measured rate had to
+move to be feasible — large values point to a missing medium component or a
+measurement problem). `notebooks/04_zela_fedbatch_tutorial.ipynb` shows how to read
+all of these on a real dataset.
 
 ---
 

@@ -28,10 +28,20 @@ st.set_page_config(page_title="iCHO3K Flux/Expression Explorer", layout="wide")
 # ---------------------------------------------------------------------------
 # Loaders (cached)
 # ---------------------------------------------------------------------------
+def find_datasets() -> dict[str, Path]:
+    """Every pipeline run under results/ that has explorer matrices: name -> fluxes dir."""
+    found = {}
+    for p in sorted(C.RESULTS.glob("**/flux_matrix.parquet")):
+        d = p.parent
+        name = "default (results/)" if d.parent == C.RESULTS else str(d.parent.relative_to(C.RESULTS))
+        found[name] = d
+    return found
+
+
 @st.cache_data(show_spinner=False)
-def load_matrix(kind: str) -> pd.DataFrame | None:
+def load_matrix(kind: str, flux_dir: str) -> pd.DataFrame | None:
     for ext in ("parquet", "csv"):
-        p = C.FLUX_DIR / f"{kind}.{ext}"
+        p = Path(flux_dir) / f"{kind}.{ext}"
         if p.exists():
             df = pd.read_parquet(p) if ext == "parquet" else pd.read_csv(p, index_col=0)
             df.index = df.index.astype(str)
@@ -46,8 +56,14 @@ def load_manifest() -> dict:
 
 
 @st.cache_data(show_spinner=False)
-def load_metadata(sample_ids: tuple[str, ...]) -> pd.DataFrame | None:
+def load_metadata(sample_ids: tuple[str, ...], flux_dir: str) -> pd.DataFrame | None:
     want = set(sample_ids)
+    summary = Path(flux_dir) / "sample_summary.csv"      # written by the pipeline run
+    if summary.exists():
+        m = pd.read_csv(summary, index_col=0)
+        m.index = m.index.astype(str)
+        if want & set(m.index):
+            return m
     for p in META_CANDIDATES:
         if p.exists():
             m = pd.read_csv(p, index_col=0)
@@ -58,8 +74,8 @@ def load_metadata(sample_ids: tuple[str, ...]) -> pd.DataFrame | None:
 
 
 @st.cache_data(show_spinner=True)
-def render_html(map_file: str, sample: str, mode: str, kind: str) -> tuple[str, float]:
-    matrix = load_matrix(kind)
+def render_html(map_file: str, sample: str, mode: str, kind: str, flux_dir: str) -> tuple[str, float]:
+    matrix = load_matrix(kind, flux_dir)
     emap = json.loads((MAPS_DIR / map_file).read_text())
     data = ev.reaction_data_for_sample(matrix, sample)
     cov = ev.coverage_for_map(emap, data)
@@ -80,9 +96,17 @@ def sample_label(sid: str, meta: pd.DataFrame | None) -> str:
 # ---------------------------------------------------------------------------
 st.title("🧬 iCHO3K Flux / Expression Explorer")
 
-flux = load_matrix("flux_matrix")
-expr = load_matrix("rxn_expression")
+datasets = find_datasets()
 manifest = load_manifest()
+if datasets:
+    with st.sidebar:
+        st.header("Controls")
+        ds_name = st.selectbox("Dataset", list(datasets), help="one entry per pipeline run under results/")
+    FLUX_DIR = str(datasets[ds_name])
+    flux = load_matrix("flux_matrix", FLUX_DIR)
+    expr = load_matrix("rxn_expression", FLUX_DIR)
+else:
+    flux = expr = None
 
 if flux is None or not manifest:
     st.error(
@@ -93,10 +117,9 @@ if flux is None or not manifest:
     st.stop()
 
 samples = list(flux.columns)
-meta = load_metadata(tuple(samples))
+meta = load_metadata(tuple(samples), FLUX_DIR)
 
 with st.sidebar:
-    st.header("Controls")
     st.caption(f"{flux.shape[0]} reactions · {len(samples)} samples")
 
     sample = st.selectbox("Sample", samples, format_func=lambda s: sample_label(s, meta))
@@ -165,18 +188,18 @@ if metric == "Compare":
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("**Flux**")
-        html, cov = render_html(map_file, sample, "flux", "flux_matrix")
+        html, cov = render_html(map_file, sample, "flux", "flux_matrix", FLUX_DIR)
         st.caption(f"map coverage: {cov:.0%}")
         components.html(html, height=560, scrolling=False)
     with c2:
         st.markdown("**Expression**")
-        html, cov = render_html(map_file, sample, "expression", "rxn_expression")
+        html, cov = render_html(map_file, sample, "expression", "rxn_expression", FLUX_DIR)
         st.caption(f"map coverage: {cov:.0%}")
         components.html(html, height=560, scrolling=False)
 else:
     kind = "flux_matrix" if metric == "Flux" else "rxn_expression"
     mode = "flux" if metric == "Flux" else "expression"
-    html, cov = render_html(map_file, sample, mode, kind)
+    html, cov = render_html(map_file, sample, mode, kind, FLUX_DIR)
     st.caption(f"map coverage: {cov:.0%}  ·  drag to pan, scroll to zoom")
     components.html(html, height=680, scrolling=False)
 

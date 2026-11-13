@@ -44,8 +44,22 @@ def run(synthetic: bool = True, raw_dir=None, limit: int | None = None,
     #    transcriptomics-only datasets run GIMME with expression alone)
     have_bioprocess = all(c in ds.metadata.columns for c in C.BIOPROCESS_COLS)
     qrates = qrate_calc.compute_qrates(ds.metadata) if have_bioprocess else None
-    if not have_bioprocess:
+    # Alternative: measured rates supplied directly (mmol/gDW/h per exchange reaction)
+    # in <raw_dir>/exchange_rates.csv, with optional <raw_dir>/measured_growth.csv.
+    rates_table = growth_meas = None
+    if not synthetic:
+        rdir = Path(raw_dir or (C.DATA / "raw"))
+        if (rdir / "exchange_rates.csv").exists():
+            rates_table = pd.read_csv(rdir / "exchange_rates.csv", index_col=0)
+            rates_table.index = rates_table.index.astype(str)
+            if (rdir / "measured_growth.csv").exists():
+                growth_meas = pd.read_csv(rdir / "measured_growth.csv", index_col=0).iloc[:, 0]
+                growth_meas.index = growth_meas.index.astype(str)
+            print(f"Using measured exchange rates for {rates_table.shape[1]} reactions")
+    if not have_bioprocess and rates_table is None:
         print("No bioprocess columns found -> running expression-only (no exchange bounds)")
+    recon_rows: list = []
+    summary_rows: list[dict] = []
 
     # 4. per-sample GIMME + FBA
     sample_ids = ds.sample_ids()
@@ -65,8 +79,18 @@ def run(synthetic: bool = True, raw_dir=None, limit: int | None = None,
         cov_accum["model_gene_coverage"].append(rep.model_gene_coverage)
         cov_accum["n_reactions_scored"].append(rep.n_reactions_scored)
 
-        bounds = ({} if qrates is None else qrate_calc.qrate_bounds_for_sample(
-            qrates, meta["project"], meta["clone"], meta["condition"], meta["timepoint"]))
+        if rates_table is not None and sid in rates_table.index:
+            g_meas = float(growth_meas.get(sid, 0.0)) if growth_meas is not None else 0.0
+            bounds, recon = qrate_calc.reconcile_rates(
+                model, rates_table.loc[sid].to_dict(), min_growth=g_meas)
+            if bounds is None:
+                infeasible.append({"sample_id": sid, "status": "rates_not_reconcilable"})
+                print(f"[{k}/{len(sample_ids)}] {sid}: measured rates cannot be reconciled")
+                continue
+            recon_rows.append(recon.assign(sample_id=sid))
+        else:
+            bounds = ({} if qrates is None else qrate_calc.qrate_bounds_for_sample(
+                qrates, meta["project"], meta["clone"], meta["condition"], meta["timepoint"]))
         res = gimme_fba.run_gimme(model, scores, exchange_bounds=bounds)
 
         if res.status != "optimal" or res.fluxes.empty:
@@ -74,6 +98,16 @@ def run(synthetic: bool = True, raw_dir=None, limit: int | None = None,
             print(f"[{k}/{len(sample_ids)}] {sid}: INFEASIBLE ({res.status})")
             continue
 
+        summary_rows.append({
+            "sample_id": sid, "project": meta["project"], "clone": meta["clone"],
+            "condition": meta["condition"], "timepoint": meta["timepoint"],
+            "growth_capacity": res.growth_max, "growth_used": res.growth,
+            "measured_growth": (float(growth_meas.get(sid, np.nan))
+                                if growth_meas is not None else np.nan),
+            "expression_inconsistency": res.inconsistency,
+            "rate_adjustment_total": (float(recon_rows[-1]["deviation"].abs().sum())
+                                      if rates_table is not None and recon_rows else np.nan),
+        })
         # full flux + expression vectors for the interactive explorer
         flux_cols[sid] = res.fluxes
         expr_cols[sid] = pd.Series(scores, dtype=float)
@@ -101,11 +135,18 @@ def run(synthetic: bool = True, raw_dir=None, limit: int | None = None,
         params={"gimme_quantile": C.GIMME_QUANTILE,
                 "gimme_biomass_fraction": C.GIMME_BIOMASS_FRACTION,
                 "qrate_tol": qrate_calc.QRATE_TOL,
-                "exchange_constraints_applied": bool(have_bioprocess),
+                "exchange_constraints_applied": bool(have_bioprocess or rates_table is not None),
+                "exchange_constraint_source": ("measured rates (reconciled)" if rates_table is not None
+                                               else "q-rates from concentrations" if have_bioprocess
+                                               else "none"),
                 "panel_subsystems": C.PANEL_SUBSYSTEMS},
     )
     paths = export.write_outputs(flux_table, manifest, out_dir=flux_dir)
     mat_paths = export.write_matrices(flux_cols, expr_cols, out_dir=flux_dir)
+    pd.DataFrame(summary_rows).to_csv(flux_dir / "sample_summary.csv", index=False)
+    if recon_rows:
+        pd.concat(recon_rows)[["sample_id", "reaction_id", "measured", "used", "deviation"]] \
+            .to_csv(flux_dir / "exchange_reconciliation.csv", index=False)
     print(f"\nWrote flux table ({flux_table.shape[0]} rows) -> {paths.get('csv')}")
     if mat_paths:
         print(f"Wrote explorer matrices -> {', '.join(p.name for p in mat_paths.values())}")

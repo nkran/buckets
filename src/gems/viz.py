@@ -178,7 +178,13 @@ def make_all_figures(flux_table: pd.DataFrame, out_dir: Path = C.FIG_DIR,
     figs.append(key_reaction_trajectories(flux_table, out_dir / "flux_trajectories.png"))
 
     if contrasts is None:
-        contrasts = [("condition", "iFB", "FB")]
+        conds = sorted(map(str, flux_table["condition"].dropna().unique()))
+        if {"iFB", "FB"} <= set(conds):
+            contrasts = [("condition", "iFB", "FB")]
+        elif len(conds) == 2:                      # any two-condition design, e.g. ZeLa vs WT
+            contrasts = [("condition", conds[1], conds[0])]
+        else:
+            contrasts = []
         if "responder" in flux_table.columns and flux_table["responder"].nunique() > 1:
             contrasts.append(("responder", "Responder", "NonResponder"))
 

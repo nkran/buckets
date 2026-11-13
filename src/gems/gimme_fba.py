@@ -28,6 +28,7 @@ class GimmeResult:
     growth: float
     inconsistency: float
     fluxes: pd.Series          # reaction_id -> flux (full model)
+    growth_max: float = float("nan")   # max biomass flux the constraints allow
 
 
 def _penalties(scores: dict[str, float], quantile: float) -> tuple[dict[str, float], float]:
@@ -87,7 +88,7 @@ def run_gimme(model, scores: dict[str, float],
         inconsistency = float(sum(c * abs(fluxes.get(rid, 0.0))
                                   for rid, c in penalties.items()))
         growth = float(fluxes.get(biomass_rxn, np.nan))
-        return GimmeResult("optimal", growth, inconsistency, fluxes)
+        return GimmeResult("optimal", growth, inconsistency, fluxes, float(biomass_max))
 
 
 def _apply_exchange_bounds(model, bounds: dict[str, tuple[float, float]]) -> None:

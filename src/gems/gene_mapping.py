@@ -65,6 +65,12 @@ def counts_to_entrez(counts: pd.DataFrame, crosswalk: pd.DataFrame) -> pd.DataFr
     """
     xref = crosswalk[["ensembl_gene_id", "entrez_id"]].dropna().drop_duplicates()
     value_cols = list(counts.columns)
+    # Ensembl ids often carry a version suffix (ENSCGRG00015007592.1); drop it
+    idx = counts.index.astype(str)
+    if idx.str.match(r"^ENS[A-Z]*G\d+\.\d+$").any():
+        counts = counts.copy()
+        counts.index = idx.str.replace(r"\.\d+$", "", regex=True)
+        counts = counts.groupby(level=0).sum()
     merged = xref.merge(counts, left_on="ensembl_gene_id", right_index=True)
     if merged.empty:
         return pd.DataFrame(columns=value_cols)

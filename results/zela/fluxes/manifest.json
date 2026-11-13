@@ -1,0 +1,38 @@
+{
+  "generated_utc": "2026-11-13T08:39:02.426622+00:00",
+  "model": {
+    "id": "iCHO3K_base_cho_s",
+    "n_reactions": 8368,
+    "n_metabolites": 4695,
+    "n_genes": 2929,
+    "biomass_reaction": "biomass_cho_s"
+  },
+  "solver": "glpk_interface",
+  "n_samples": 43,
+  "n_infeasible": 0,
+  "infeasible_samples": [],
+  "mapping_coverage": {
+    "entrez_coverage": 0.5644,
+    "model_gene_coverage": 0.9167,
+    "n_reactions_scored": 5941.0
+  },
+  "parameters": {
+    "gimme_quantile": 0.25,
+    "gimme_biomass_fraction": 0.5,
+    "qrate_tol": 0.2,
+    "exchange_constraints_applied": true,
+    "exchange_constraint_source": "measured rates (reconciled)",
+    "panel_subsystems": [
+      "GLYCOLYSIS/GLUCONEOGENESIS",
+      "CITRIC ACID CYCLE",
+      "PENTOSE PHOSPHATE PATHWAY",
+      "PYRUVATE METABOLISM",
+      "OXIDATIVE PHOSPHORYLATION",
+      "GLUTAMATE METABOLISM",
+      "FATTY ACID METABOLISM",
+      "GLYCEROLIPID METABOLISM",
+      "GLYCEROPHOSPHOLIPID METABOLISM",
+      "SQUALENE AND CHOLESTEROL SYNTHESIS"
+    ]
+  }
+}
