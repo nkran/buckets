@@ -23,3 +23,15 @@ def test_pipeline_end_to_end_small(tmp_path):
     assert out["manifest"]["n_infeasible"] <= out["manifest"]["n_samples"] // 2
     # figures written
     assert len(out["figures"]) >= 2
+
+
+@pytest.mark.slow
+def test_parallel_matches_serial(tmp_path):
+    """Results must not depend on worker count or on the order samples are solved."""
+    kw = dict(synthetic=True, limit=3, make_figures=False, synth_dir=tmp_path / "synthetic")
+    pipeline.run(out_dir=tmp_path / "serial", jobs=1, **kw)
+    pipeline.run(out_dir=tmp_path / "parallel", jobs=2, **kw)
+    a = pd.read_parquet(tmp_path / "serial" / "fluxes" / "flux_matrix.parquet")
+    b = pd.read_parquet(tmp_path / "parallel" / "fluxes" / "flux_matrix.parquet")
+    assert list(a.columns) == list(b.columns)
+    assert (a - b).abs().max().max() < 1e-9

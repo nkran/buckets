@@ -41,6 +41,22 @@ def _penalties(scores: dict[str, float], quantile: float) -> tuple[dict[str, flo
     return pen, threshold
 
 
+def cold_start(model) -> None:
+    """Reset the LP solver to a standard starting basis.
+
+    The GIMME / reconciliation LPs have many equally optimal flux distributions. GLPK
+    returns the one nearest its current basis, which is left over from the previous
+    solve, so without a reset a sample's fluxes would depend on which sample was solved
+    before it (and differ between serial and parallel runs). Objective values are
+    unaffected either way.
+    """
+    try:
+        import swiglpk
+        swiglpk.glp_std_basis(model.solver.problem)
+    except Exception:       # non-GLPK solver: nothing to reset
+        pass
+
+
 def run_gimme(model, scores: dict[str, float],
               exchange_bounds: dict[str, tuple[float, float]] | None = None,
               quantile: float = C.GIMME_QUANTILE,
@@ -58,6 +74,7 @@ def run_gimme(model, scores: dict[str, float],
     """
     penalties, _ = _penalties(scores, quantile)
 
+    cold_start(model)
     with model:
         if exchange_bounds:
             _apply_exchange_bounds(model, exchange_bounds)

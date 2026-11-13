@@ -17,9 +17,51 @@ from . import config as C
 from . import data_io, export, gene_mapping, gimme_fba, model_setup, qrate_calc, viz
 
 
+# ---------------------------------------------------------------------------
+# Per-sample work. Kept at module level so it can run in worker processes.
+# ---------------------------------------------------------------------------
+_W: dict = {}   # per-worker state: model + crosswalk, loaded once by _init_worker
+
+
+def _init_worker(crosswalk: pd.DataFrame) -> None:
+    _W["model"] = model_setup.get_base_model()
+    _W["crosswalk"] = crosswalk
+
+
+def _solve_sample(sid: str, expr: pd.DataFrame, rates: dict | None, g_meas: float,
+                  qbounds: dict | None, model=None, crosswalk=None) -> dict:
+    """Map expression, build exchange bounds, run GIMME for one sample.
+
+    ``expr`` is the single-column counts table for this sample. Exactly one of
+    ``rates`` (measured exchange rates, reconciled here) or ``qbounds`` (bounds from
+    concentration-derived q-rates, or {} for expression-only) is used.
+    """
+    model = model if model is not None else _W["model"]
+    crosswalk = crosswalk if crosswalk is not None else _W["crosswalk"]
+    scores, rep = gene_mapping.map_expression(model, expr, crosswalk, sid)
+    out = {"sid": sid, "scores": scores, "rep": rep, "recon": None}
+    if rates is not None:
+        bounds, recon = qrate_calc.reconcile_rates(model, rates, min_growth=g_meas)
+        if bounds is None:
+            out["status"] = "rates_not_reconcilable"
+            return out
+        out["recon"] = recon.assign(sample_id=sid)
+    else:
+        bounds = qbounds or {}
+    res = gimme_fba.run_gimme(model, scores, exchange_bounds=bounds)
+    out["status"] = res.status if not res.fluxes.empty else "no_fluxes"
+    out["res"] = res
+    if out["status"] == "optimal":
+        out["panel"] = gimme_fba.extract_panel(res.fluxes, model)
+    return out
+
+
 def run(synthetic: bool = True, raw_dir=None, limit: int | None = None,
         rebuild_model: bool = False, make_figures: bool = True,
-        contrasts=None, crosswalk_path=None, out_dir=None, synth_dir=None) -> dict:
+        contrasts=None, crosswalk_path=None, out_dir=None, synth_dir=None,
+        jobs: int = 1) -> dict:
+    """Run the whole pipeline. ``jobs`` > 1 solves samples in parallel worker
+    processes (0 = all CPU cores); results are identical to a serial run."""
     # Synthetic runs never write into results/fluxes or results/figures (those hold the
     # real-data deliverable the explorer reads); they default to results/synthetic/.
     from pathlib import Path
@@ -72,32 +114,51 @@ def run(synthetic: bool = True, raw_dir=None, limit: int | None = None,
     flux_cols: dict[str, "pd.Series"] = {}   # sample_id -> full model fluxes (for explorer)
     expr_cols: dict[str, "pd.Series"] = {}   # sample_id -> reaction expression scores
 
-    for k, sid in enumerate(sample_ids, 1):
+    def task_args(sid):
         meta = ds.metadata.loc[sid]
-        scores, rep = gene_mapping.map_expression(model, ds.counts, crosswalk, sid)
+        if rates_table is not None and sid in rates_table.index:
+            g = float(growth_meas.get(sid, 0.0)) if growth_meas is not None else 0.0
+            return (sid, ds.counts[[sid]], rates_table.loc[sid].to_dict(), g, None)
+        qb = ({} if qrates is None else qrate_calc.qrate_bounds_for_sample(
+            qrates, meta["project"], meta["clone"], meta["condition"], meta["timepoint"]))
+        return (sid, ds.counts[[sid]], None, 0.0, qb)
+
+    import os
+    n_jobs = (os.cpu_count() or 1) if jobs == 0 else max(1, int(jobs))
+    n_jobs = min(n_jobs, len(sample_ids)) or 1
+    results: dict[str, dict] = {}
+    if n_jobs == 1:
+        for k, sid in enumerate(sample_ids, 1):
+            results[sid] = _solve_sample(*task_args(sid), model=model, crosswalk=crosswalk)
+            if k % 10 == 0 or k == len(sample_ids):
+                print(f"[{k}/{len(sample_ids)}] {sid}: {results[sid]['status']}")
+    else:
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        print(f"Solving {len(sample_ids)} samples on {n_jobs} worker processes")
+        with ProcessPoolExecutor(max_workers=n_jobs, initializer=_init_worker,
+                                 initargs=(crosswalk,)) as pool:
+            futs = {pool.submit(_solve_sample, *task_args(sid)): sid for sid in sample_ids}
+            for k, fut in enumerate(as_completed(futs), 1):
+                r = fut.result()
+                results[r["sid"]] = r
+                if k % 10 == 0 or k == len(sample_ids):
+                    print(f"[{k}/{len(sample_ids)}] done")
+
+    # collect in sample order so output is identical to a serial run
+    for sid in sample_ids:
+        r = results[sid]
+        meta = ds.metadata.loc[sid]
+        rep = r["rep"]
         cov_accum["entrez_coverage"].append(rep.entrez_coverage)
         cov_accum["model_gene_coverage"].append(rep.model_gene_coverage)
         cov_accum["n_reactions_scored"].append(rep.n_reactions_scored)
-
-        if rates_table is not None and sid in rates_table.index:
-            g_meas = float(growth_meas.get(sid, 0.0)) if growth_meas is not None else 0.0
-            bounds, recon = qrate_calc.reconcile_rates(
-                model, rates_table.loc[sid].to_dict(), min_growth=g_meas)
-            if bounds is None:
-                infeasible.append({"sample_id": sid, "status": "rates_not_reconcilable"})
-                print(f"[{k}/{len(sample_ids)}] {sid}: measured rates cannot be reconciled")
-                continue
-            recon_rows.append(recon.assign(sample_id=sid))
-        else:
-            bounds = ({} if qrates is None else qrate_calc.qrate_bounds_for_sample(
-                qrates, meta["project"], meta["clone"], meta["condition"], meta["timepoint"]))
-        res = gimme_fba.run_gimme(model, scores, exchange_bounds=bounds)
-
-        if res.status != "optimal" or res.fluxes.empty:
-            infeasible.append({"sample_id": sid, "status": res.status})
-            print(f"[{k}/{len(sample_ids)}] {sid}: INFEASIBLE ({res.status})")
+        if r["status"] != "optimal":
+            infeasible.append({"sample_id": sid, "status": r["status"]})
+            print(f"{sid}: {r['status']}")
             continue
-
+        res = r["res"]
+        if r["recon"] is not None:
+            recon_rows.append(r["recon"])
         summary_rows.append({
             "sample_id": sid, "project": meta["project"], "clone": meta["clone"],
             "condition": meta["condition"], "timepoint": meta["timepoint"],
@@ -105,15 +166,13 @@ def run(synthetic: bool = True, raw_dir=None, limit: int | None = None,
             "measured_growth": (float(growth_meas.get(sid, np.nan))
                                 if growth_meas is not None else np.nan),
             "expression_inconsistency": res.inconsistency,
-            "rate_adjustment_total": (float(recon_rows[-1]["deviation"].abs().sum())
-                                      if rates_table is not None and recon_rows else np.nan),
+            "rate_adjustment_total": (float(r["recon"]["deviation"].abs().sum())
+                                      if r["recon"] is not None else np.nan),
         })
         # full flux + expression vectors for the interactive explorer
         flux_cols[sid] = res.fluxes
-        expr_cols[sid] = pd.Series(scores, dtype=float)
-
-        panel = gimme_fba.extract_panel(res.fluxes, model)
-        for _, prow in panel.iterrows():
+        expr_cols[sid] = pd.Series(r["scores"], dtype=float)
+        for _, prow in r["panel"].iterrows():
             records.append({
                 "project": meta["project"], "clone": meta["clone"],
                 "condition": meta["condition"], "timepoint": meta["timepoint"],
@@ -121,9 +180,6 @@ def run(synthetic: bool = True, raw_dir=None, limit: int | None = None,
                 "reaction_id": prow["reaction_id"], "subsystem": prow["subsystem"],
                 "flux": prow["flux"],
             })
-        if k % 10 == 0 or k == len(sample_ids):
-            print(f"[{k}/{len(sample_ids)}] {sid}: growth={res.growth:.3f} "
-                  f"incon={res.inconsistency:.2f}")
 
     # 5. export
     flux_table = export.assemble_flux_table(records)
@@ -173,13 +229,15 @@ def main():
                          "default data/maps/ensembl_picrh_to_entrez.tsv")
     ap.add_argument("--out", metavar="DIR", default=None,
                     help="output root (default: results/ for real data, results/synthetic/ for --synthetic)")
+    ap.add_argument("--jobs", type=int, default=0,
+                    help="parallel worker processes (default 0 = all CPU cores; 1 = serial)")
     ap.add_argument("--no-figures", action="store_true")
     args = ap.parse_args()
 
     synthetic = args.synthetic or not args.raw
     run(synthetic=synthetic, raw_dir=args.raw, limit=args.limit,
         rebuild_model=args.rebuild_model, make_figures=not args.no_figures,
-        crosswalk_path=args.crosswalk, out_dir=args.out)
+        crosswalk_path=args.crosswalk, out_dir=args.out, jobs=args.jobs)
 
 
 if __name__ == "__main__":

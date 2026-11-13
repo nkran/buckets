@@ -169,8 +169,12 @@ The committed `results/` are the GSE140669 run (§7.1). `data/` and `escher_maps
 in git — rebuild them with `scripts/build_gene_id_master.py`, `scripts/prepare_gse140669.py`
 and `scripts/prepare_escher_maps.py`.
 
-**Runtime:** ~6.8 s/sample on GLPK → ~16 min for 144 samples, ~80 min for the full
-5×12×2×6 = 720-sample design.
+**Runtime:** about 11 s per sample on GLPK. Samples run in parallel on all CPU cores by
+default (`--jobs 0`; `--jobs 1` for serial), so on a 10-core laptop the full
+5×12×2×6 = 720-sample design takes roughly 15 minutes. Results are identical whatever
+the number of workers: the solver is reset before every sample, because the LP has many
+equally optimal flux distributions and would otherwise return one that depends on the
+previously solved sample.
 
 ---
 

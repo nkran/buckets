@@ -135,6 +135,8 @@ def reconcile_rates(model, measured: dict[str, float], *, min_growth: float = 0.
     free = set(C.MEDIUM_FREE)
     caps: dict[str, tuple[float, float]] = {}
 
+    from .gimme_fba import cold_start
+    cold_start(model)
     with model:
         for ex in model.exchanges:
             if ex.id not in measured and ex.id not in free and ex.lower_bound < -unmeasured_cap:
