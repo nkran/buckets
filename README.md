@@ -497,6 +497,27 @@ Encoding note: Escher ties a reaction's colour and thickness to one data vector,
 flux and expression are shown as **separate layers** (toggle) plus a **Compare** view —
 not both channels on one arrow at once.
 
+## 8c. Medium & process designer (FB vs iFB what-if dashboard)
+
+```bash
+streamlit run app/streamlit_app.py   # then open "Medium designer" in the sidebar
+```
+
+Edit the medium table (basal and feed concentrations, uptake limits), set each
+process (seed density, first feed day, daily feed %, glucose top-up), press **▶ Run**.
+The page runs a dynamic FBA (`src/gems/dfba.py`) for FB and iFB and shows VCD,
+viability, metabolites, what limits growth over time, and fluxes on pathway maps for
+any day. **📌 Pin as baseline** keeps a run so the next one is drawn against it.
+
+- Media live in `media/*.csv` (columns: `exchange_id, name, basal_mM, feed_mM,
+  max_uptake, km_mM, forced_uptake`). Drop your own medium CSV there and it shows up
+  as a preset, or upload it in the sidebar.
+- `media/generic_cd_medium.csv` and the defaults in `dfba.Physiology` are
+  **illustrative**. Calibrate uptake limits, death rates and inhibition constants
+  against your bioreactor data before trusting absolute numbers. Use the dashboard
+  for directions and relative effects.
+- Each process takes about 15 s at a 4 h step.
+
 ## 9. Testing
 
 ```bash

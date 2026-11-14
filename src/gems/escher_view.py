@@ -152,13 +152,15 @@ def build_escher_html(map_path, reaction_data: dict[str, float], *, mode: str = 
     # Fit the view to the CONTENT (union of zoom-group children, excluding the big
     # background canvas rect) once Escher has drawn it. Fitting the canvas instead
     # would shrink content to sub-pixel on the large RECON1 maps.
+    # The iframe may start hidden (e.g. in an inactive Streamlit tab) with zero size, so
+    # keep polling until the container is visible and the drawing is stable, and refit
+    # whenever the iframe is resized.
     autofit = (
-        "<script>(function(){var n=0,last=-1,t=setInterval(function(){"
-        "var zg=document.querySelector('.zoom-g');"
+        "<script>(function(){var last=-1,stable=0,done=false;"
+        "function fit(){var zg=document.querySelector('.zoom-g');"
         "var mc=document.getElementById('map-container');"
-        "if(!(zg&&mc&&zg.querySelector('.reaction'))){if(++n>80)clearInterval(t);return;}"
-        "var cnt=zg.querySelectorAll('.reaction').length;"
-        "if(cnt!==last){last=cnt;if(++n>80)clearInterval(t);return;}"  # wait until stable
+        "if(!(zg&&mc&&zg.querySelector('.reaction')))return false;"
+        "var cw=mc.clientWidth,ch=mc.clientHeight;if(!cw||!ch)return false;"
         "var x0=1e9,y0=1e9,x1=-1e9,y1=-1e9,ok=false,k=zg.children;"
         "for(var i=0;i<k.length;i++){var c=k[i];"
         "if((c.getAttribute('class')||'').indexOf('canvas')>=0)continue;"
@@ -166,11 +168,15 @@ def build_escher_html(map_path, reaction_data: dict[str, float], *, mode: str = 
         "if(!b||(b.width===0&&b.height===0))continue;"
         "ok=true;x0=Math.min(x0,b.x);y0=Math.min(y0,b.y);"
         "x1=Math.max(x1,b.x+b.width);y1=Math.max(y1,b.y+b.height);}"
-        "if(ok){var bw=x1-x0,bh=y1-y0,cw=mc.clientWidth,ch=mc.clientHeight;"
+        "if(!ok)return false;var bw=x1-x0,bh=y1-y0;"
         "var s=0.92*Math.min(cw/bw,ch/bh);"
         "var tx=cw/2-s*(x0+bw/2),ty=ch/2-s*(y0+bh/2);"
-        "zg.setAttribute('transform','translate('+tx+','+ty+') scale('+s+')');"
-        "clearInterval(t);}if(++n>80)clearInterval(t);},150);})();</script>"
+        "zg.setAttribute('transform','translate('+tx+','+ty+') scale('+s+')');return true;}"
+        "var t=setInterval(function(){var zg=document.querySelector('.zoom-g');"
+        "var cnt=zg?zg.querySelectorAll('.reaction').length:0;"
+        "if(cnt!==last){last=cnt;stable=0;return;}"
+        "if(++stable<2)return;if(fit()){done=true;clearInterval(t);}},150);"
+        "window.addEventListener('resize',function(){if(done)fit();});})();</script>"
     )
     html = html.replace("</body>", autofit + "</body>", 1) if "</body>" in html else html + autofit
     return html
